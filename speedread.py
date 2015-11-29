@@ -1,9 +1,17 @@
+import argparse
+import contextlib
+import math
 import Queue
+import re
 import sys
 import threading
-import blessings
 import time
-import contextlib
+
+import blessings
+
+PARSER = argparse.ArgumentParser(description='')
+PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
+
 
 def spawn(f):
     t = threading.Thread(target=f)
@@ -12,15 +20,28 @@ def spawn(f):
     return t
 
 def main():
+    args = PARSER.parse_args()
     reader = Reader(sys.stdin)
 
     display = Display()
 
-    pusher = Pusher(reader, display)
+    pusher = Pusher(reader, display, 60. / args.wpm )
     pusher.run()
 
     #control = spawn_control(display)
 
+def re_partition(text, match_re):
+    full_re = '(.*?)({})(.*)'.format(match_re)
+    match = re.search(full_re, text)
+    if match:
+        return match.group(1), match.group(2), match.group(3)
+    else:
+        return text, None, ''
+
+class WORD_TYPE(object):
+    COMMA = 'comma'
+    SPACE = 'space'
+    SENTENCE = 'sentence'
 
 class Reader(object):
     def __init__(self, stream):
@@ -29,26 +50,58 @@ class Reader(object):
 
     def get_word(self):
         if not self.line_words:
+            self.line_words = []
             line = self.stream.readline()
             if not line:
-                return None
-            self.line_words = line.split(' ')[::-1]
-        return self.line_words.pop().strip()
+                return None, None
+
+            rest = line
+            while True:
+                word, sep, rest = re_partition(rest, '[, ;.]+')
+                if sep is None:
+                    word_type = WORD_TYPE.SENTENCE
+                elif ',' in sep or ';' in sep:
+                    word_type = WORD_TYPE.COMMA
+                elif '.' in sep:
+                    word_type = WORD_TYPE.SENTENCE
+                else:
+                    word_type = WORD_TYPE.SPACE
+                self.line_words.append((word_type, word.strip()))
+
+                if sep is None:
+                    break
+
+            self.line_words = list(reversed(self.line_words))
+        return self.line_words.pop()
 
 
 class Pusher(object):
-    def __init__(self, reader, display):
+    def __init__(self, reader, display, word_period):
         self.reader = reader
         self.display = display
+        self.word_period = word_period
+
+    def set_word_period(self, word_period):
+        self.word_period = word_period
 
     def run(self):
         while True:
-            word = self.reader.get_word()
+            word_type, word = self.reader.get_word()
             if word is None:
                 return
             else:
                 with self.display.display_word(word):
-                    time.sleep(1)
+                    delay = word_multiple(word_type, word) * self.word_period
+                    time.sleep(delay)
+
+def word_multiple(word_type, word):
+    return {
+        WORD_TYPE.COMMA: 2,
+        WORD_TYPE.SENTENCE: 3,
+        WORD_TYPE.SPACE: math.sqrt(len(word)) / math.sqrt(4)
+    }[word_type]
+
+
 
 class DecoratedText(object):
     # DecoratedText(term, (term.bold, 'THis is bold'), (None, 'This is not bold'))
@@ -88,6 +141,16 @@ class DecoratedText(object):
     def __radd__(self, other):
         return DecoratedText(self.term, [other] + self.format_pairs)
 
+
+class NonclearingWriter(object):
+    def __init__(self, stream):
+        self.stream = stream
+
+    @contextlib.contextmanager
+    def write(self, text):
+        self.stream.write(str(text))
+        self.stream.flush()
+        yield
 
 class ClearingWriter(object):
     def __init__(self, stream, term):
@@ -138,6 +201,7 @@ class Display(object):
         self.q = Queue.Queue()
         self.focus_column = 10
         self.term = blessings.Terminal()
+        #self.writer = NonclearingWriter(sys.stdout)
         self.writer = ClearingWriter(sys.stdout, self.term)
 
     def display_word(self, word):
@@ -164,4 +228,4 @@ def find_word_delay_factor(word):
     return 1
 
 if __name__ == '__main__':
-	main()
+    main()
