@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import itertools
 import math
 import Queue
 import re
@@ -8,9 +9,13 @@ import threading
 import time
 
 import blessings
+import readchar
+import seeksearch
 
 PARSER = argparse.ArgumentParser(description='')
 PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
+PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
+PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
 
 
 def spawn(f):
@@ -21,14 +26,33 @@ def spawn(f):
 
 def main():
     args = PARSER.parse_args()
-    reader = Reader(sys.stdin)
+    with open(args.filename) as f:
+        reader = Reader(f)
 
-    display = Display()
+        display = Display()
 
-    pusher = Pusher(reader, display, 60. / args.wpm )
-    pusher.run()
+        pusher = Pusher(reader, display, 60. / args.wpm )
+        controller = Controller(pusher, display)
+        spawn(pusher.run)
 
-    #control = spawn_control(display)
+        controller.run()
+
+class Controller(object):
+    def __init__(self, pusher, display):
+        self.pusher = pusher
+        self.display = display
+
+    def run(self):
+        while True:
+            COMMANDS = {
+                'b': self.pusher.back_sentence,
+                '\x03': sys.exit
+            }
+            char = readchar.readchar()
+            method = COMMANDS.get(char)
+            if method:
+                method()
+
 
 def re_partition(text, match_re):
     full_re = '(.*?)({})(.*)'.format(match_re)
@@ -47,32 +71,48 @@ class Reader(object):
     def __init__(self, stream):
         self.stream = stream
         self.line_words = None
+        self.lock = threading.RLock()
+
+    def back_sentence(self):
+        with self.lock:
+            with seeksearch.save_excursion(self.stream):
+                index = seeksearch.seek_rfind(self.stream, '.')
+
+            if index == -1:
+                return
+            else:
+                self.line_words = []
+                self.stream.seek(index)
 
     def get_word(self):
-        if not self.line_words:
-            self.line_words = []
-            line = self.stream.readline()
-            if not line:
-                return None, None
+        with self.lock:
+            while not self.line_words:
+                self.line_words = []
+                line = self.stream.readline()
+                if not line:
+                    return None, None
 
-            rest = line
-            while True:
-                word, sep, rest = re_partition(rest, '[, ;.]+')
-                if sep is None:
-                    word_type = WORD_TYPE.SENTENCE
-                elif ',' in sep or ';' in sep:
-                    word_type = WORD_TYPE.COMMA
-                elif '.' in sep:
-                    word_type = WORD_TYPE.SENTENCE
-                else:
-                    word_type = WORD_TYPE.SPACE
-                self.line_words.append((word_type, word.strip()))
+                rest = line
+                while True:
+                    word, sep, rest = re_partition(rest, '[, ;.]+')
+                    if sep is None:
+                        word_type = WORD_TYPE.SENTENCE
+                    elif ',' in sep or ';' in sep:
+                        word_type = WORD_TYPE.COMMA
+                    elif '.' in sep:
+                        word_type = WORD_TYPE.SENTENCE
+                    else:
+                        word_type = WORD_TYPE.SPACE
 
-                if sep is None:
-                    break
+                    if word.strip():
+                        self.line_words.append((word_type, word.strip()))
 
-            self.line_words = list(reversed(self.line_words))
-        return self.line_words.pop()
+                    if sep is None:
+                        break
+
+                self.line_words = list(reversed(self.line_words))
+
+            return self.line_words.pop()
 
 
 class Pusher(object):
@@ -80,9 +120,13 @@ class Pusher(object):
         self.reader = reader
         self.display = display
         self.word_period = word_period
+        self.q = Queue.Queue()
 
     def set_word_period(self, word_period):
         self.word_period = word_period
+
+    def back_sentence(self):
+        self.reader.back_sentence()
 
     def run(self):
         while True:
@@ -153,9 +197,10 @@ class NonclearingWriter(object):
         yield
 
 class ClearingWriter(object):
-    def __init__(self, stream, term):
+    def __init__(self, stream, term, debug=False):
         self.stream = stream
         self.term = term
+        self.debug = debug
 
     @contextlib.contextmanager
     def write(self, text):
@@ -167,34 +212,33 @@ class ClearingWriter(object):
             else:
                 yield
 
-    def format_line(self, line):
-        if isinstance(line, str):
-            return line
-        else:
-            return line.format()
+    def _write(self, text):
+        self.stream.write(text)
+        if self.debug:
+            self.stream.flush(); time.sleep(1)
 
     @contextlib.contextmanager
     def _write_line(self, line):
-        self.stream.write(str(line))
-        self.stream.write('\n')
+        self._write(str(line))
+        self._write('\r\n') # readchar switches off carriage returns
 
         yield
 
         line_length = len(line)
 
-        self.stream.write(self.term.move_up)
+        self._write(self.term.move_up)
         for _ in xrange(line_length):
-            self.stream.write(self.term.move_right)
+            self._write(self.term.move_right)
 
         for _ in xrange(line_length):
-            self.stream.write(self.term.move_left)
-
-
-        for _ in xrange(line_length):
-            self.stream.write(' ')
+            self._write(self.term.move_left)
 
         for _ in xrange(line_length):
-            self.stream.write(self.term.move_left)
+            self._write(' ')
+
+        for _ in xrange(line_length):
+            self._write(self.term.move_left)
+
 
 class Display(object):
     def __init__(self):
