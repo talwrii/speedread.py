@@ -15,7 +15,9 @@ import seeksearch
 PARSER = argparse.ArgumentParser(description='')
 PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
 PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
+PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
 PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
+
 
 
 def spawn(f):
@@ -33,9 +35,12 @@ def main():
 
         pusher = Pusher(reader, display, 60. / args.wpm )
         controller = Controller(pusher, display)
-        spawn(pusher.run)
 
-        controller.run()
+        if args.no_controls:
+            pusher.run()
+        else:
+            push_thread = spawn(pusher.run)
+            controller.run()
 
 class Controller(object):
     def __init__(self, pusher, display):
@@ -46,12 +51,22 @@ class Controller(object):
         while True:
             COMMANDS = {
                 'b': self.pusher.back_sentence,
+                'f': self.pusher.forward_sentence,
+                'j': self.speed_up,
+                'k': self.slow_down,
                 '\x03': sys.exit
             }
             char = readchar.readchar()
             method = COMMANDS.get(char)
             if method:
                 method()
+
+    def speed_up(self):
+        # Should really be locked
+        self.pusher.word_period *= 0.9
+
+    def slow_down(self):
+        self.pusher.word_period /= 0.9
 
 
 def re_partition(text, match_re):
@@ -71,48 +86,51 @@ class Reader(object):
     def __init__(self, stream):
         self.stream = stream
         self.line_words = None
-        self.lock = threading.RLock()
 
     def back_sentence(self):
-        with self.lock:
-            with seeksearch.save_excursion(self.stream):
-                index = seeksearch.seek_rfind(self.stream, '.')
+        with seeksearch.save_excursion(self.stream):
+            index = seeksearch.seek_rfind(self.stream, '.')
 
-            if index == -1:
-                return
-            else:
-                self.line_words = []
-                self.stream.seek(index)
+        if index != -1:
+            self.line_words = []
+            self.stream.seek(index)
+
+    def forward_sentence(self):
+        with seeksearch.save_excursion(self.stream):
+            index = seeksearch.seek_find(self.stream, '.')
+
+        if index != -1:
+            self.line_words = []
+            self.stream.seek(index)
 
     def get_word(self):
-        with self.lock:
-            while not self.line_words:
-                self.line_words = []
-                line = self.stream.readline()
-                if not line:
-                    return None, None
+        while not self.line_words:
+            self.line_words = []
+            line = self.stream.readline().decode('utf8')
+            if not line:
+                return None, None
 
-                rest = line
-                while True:
-                    word, sep, rest = re_partition(rest, '[, ;.]+')
-                    if sep is None:
-                        word_type = WORD_TYPE.SENTENCE
-                    elif ',' in sep or ';' in sep:
-                        word_type = WORD_TYPE.COMMA
-                    elif '.' in sep:
-                        word_type = WORD_TYPE.SENTENCE
-                    else:
-                        word_type = WORD_TYPE.SPACE
+            rest = line
+            while True:
+                word, sep, rest = re_partition(rest, '[, ;.]+')
+                if sep is None:
+                    word_type = WORD_TYPE.SENTENCE
+                elif ',' in sep or ';' in sep:
+                    word_type = WORD_TYPE.COMMA
+                elif '.' in sep:
+                    word_type = WORD_TYPE.SENTENCE
+                else:
+                    word_type = WORD_TYPE.SPACE
 
-                    if word.strip():
-                        self.line_words.append((word_type, word.strip()))
+                if word.strip():
+                    self.line_words.append((word_type, word.strip()))
 
-                    if sep is None:
-                        break
+                if sep is None:
+                    break
 
-                self.line_words = list(reversed(self.line_words))
+            self.line_words = list(reversed(self.line_words))
 
-            return self.line_words.pop()
+        return self.line_words.pop()
 
 
 class Pusher(object):
@@ -122,11 +140,11 @@ class Pusher(object):
         self.word_period = word_period
         self.q = Queue.Queue()
 
-    def set_word_period(self, word_period):
-        self.word_period = word_period
-
     def back_sentence(self):
         self.reader.back_sentence()
+
+    def forward_sentence(self):
+        self.reader.forward_sentence()
 
     def run(self):
         while True:
@@ -150,7 +168,7 @@ def word_multiple(word_type, word):
 class DecoratedText(object):
     # DecoratedText(term, (term.bold, 'THis is bold'), (None, 'This is not bold'))
     def __init__(self, term, format_pairs):
-        self.format_pairs = [ (None, x) if isinstance(x, str) else x for x in format_pairs ]
+        self.format_pairs = [ (None, x) if isinstance(x, (str, unicode)) else x for x in format_pairs ]
         self.term = term
 
     def partition(self, sep):
@@ -169,9 +187,9 @@ class DecoratedText(object):
         return DecoratedText(self.term, first_pairs), ret_sep, DecoratedText(self.term, second_pairs)
 
 
-    def __str__(self):
+    def __unicode__(self):
         term = self.term
-        return ''.join((a if a is not None else term.normal) + b for a, b in self.format_pairs)
+        return u''.join((a if a is not None else term.normal) + b for a, b in self.format_pairs)
 
     def __len__(self):
         return sum(len(text) for formatting, text in self.format_pairs)
@@ -192,7 +210,7 @@ class NonclearingWriter(object):
 
     @contextlib.contextmanager
     def write(self, text):
-        self.stream.write(str(text))
+        self.stream.write(unicode(text))
         self.stream.flush()
         yield
 
@@ -213,13 +231,13 @@ class ClearingWriter(object):
                 yield
 
     def _write(self, text):
-        self.stream.write(text)
+        self.stream.write(text.encode('utf8'))
         if self.debug:
             self.stream.flush(); time.sleep(1)
 
     @contextlib.contextmanager
     def _write_line(self, line):
-        self._write(str(line))
+        self._write(unicode(line))
         self._write('\r\n') # readchar switches off carriage returns
 
         yield
