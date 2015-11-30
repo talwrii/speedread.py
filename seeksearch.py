@@ -34,7 +34,6 @@ def rread_chunks(stream, size, overlap):
 
 def seek_find(stream, needle, chunk_size=1000):
     for start, chunk in read_chunks(stream, chunk_size, len(needle)):
-        print start, chunk
         pos = chunk.find(needle)
         if pos != -1:
             return start + pos
