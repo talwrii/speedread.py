@@ -46,6 +46,15 @@ class Controller(object):
     def __init__(self, pusher, display):
         self.pusher = pusher
         self.display = display
+        self.back_pressed_time = None
+
+    def back_sentence(self):
+        if self.back_pressed_time and time.time() - self.back_pressed_time < 0.1:
+            self.pusher.back_two_sentences()
+            self.back_pressed_time = None
+        else:
+            self.back_pressed_time = time.time()
+            self.pusher.back_sentence()
 
     def run(self):
         while True:
@@ -87,17 +96,9 @@ class Reader(object):
         self.stream = stream
         self.line_words = None
 
-    def back_sentence(self):
+    def forward_sentence(self, count=1, reverse=False):
         with seeksearch.save_excursion(self.stream):
-            index = seeksearch.seek_rfind(self.stream, '.')
-
-        if index != -1:
-            self.line_words = []
-            self.stream.seek(index)
-
-    def forward_sentence(self):
-        with seeksearch.save_excursion(self.stream):
-            index = seeksearch.seek_find(self.stream, '.')
+            index = seeksearch.seek_find(self.stream, '.', count=count, reverse=reverse)
 
         if index != -1:
             self.line_words = []
@@ -141,7 +142,10 @@ class Pusher(object):
         self.q = Queue.Queue()
 
     def back_sentence(self):
-        self.reader.back_sentence()
+        self.reader.forward_sentence(reverse=True)
+
+    def back_two_sentences(self):
+        self.reader.forward_sentence(reverse=True, count=2)
 
     def forward_sentence(self):
         self.reader.forward_sentence()

@@ -32,21 +32,20 @@ def rread_chunks(stream, size, overlap):
         else:
             yield (chunk_start, chunk + old_chunk[:overlap])
 
-def seek_find(stream, needle, chunk_size=1000):
-    for start, chunk in read_chunks(stream, chunk_size, len(needle)):
-        pos = chunk.find(needle)
+def seek_find(stream, needle, chunk_size=1000, count=1, reverse=False):
+    num_found = 0
+    chunk_reader = rread_chunks if reverse else read_chunks
+    chunk_searcher = str.rfind if reverse else str.find
+    for start, chunk in chunk_reader(stream, chunk_size, len(needle)):
+        pos = chunk_searcher(chunk, needle)
         if pos != -1:
+            num_found += 1
+
+        if num_found == count:
             return start + pos
     else:
         return -1
 
-def seek_rfind(stream, needle, chunk_size=1000):
-    for start, chunk in rread_chunks(stream, chunk_size, len(needle)):
-        pos = chunk.rfind(needle)
-        if pos != -1:
-            return pos + start
-    else:
-        return -1
 
 @contextlib.contextmanager
 def save_excursion(stream):
