@@ -14,24 +14,10 @@ import seeksearch
 import termutils
 import contextutils
 
-PARSER = argparse.ArgumentParser(description='')
-PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
-PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
-PARSER.add_argument('--disable-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
-PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
-PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
-
-def spawn(f):
-    t = threading.Thread(target=f)
-    t.setDaemon(True)
-    t.start()
-    return t
-
 def main():
     args = PARSER.parse_args()
     with open(args.filename) as f:
         reader = Reader(f)
-
         term = blessings.Terminal()
 
         if args.disable_clear:
@@ -51,6 +37,7 @@ def main():
             controller.run()
 
 class Controller(object):
+    "Perform operations in response to key presses"
     def __init__(self, pusher, display):
         self.pusher = pusher
         self.display = display
@@ -87,21 +74,81 @@ class Controller(object):
     def slow_down(self):
         self.pusher.word_period /= 0.9
 
+PARSER = argparse.ArgumentParser(description='')
+PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
+PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
+PARSER.add_argument('--disable-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
+PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
+PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
 
-def re_partition(text, match_re):
-    full_re = '(.*?)({})(.*)'.format(match_re)
-    match = re.search(full_re, text)
-    if match:
-        return match.group(1), match.group(2), match.group(3)
-    else:
-        return text, None, ''
+class Display(object):
+    def __init__(self, term, writer):
+        self.q = Queue.Queue()
+        self.focus_column = 10
+        self.term = term
+        self.writer = writer
+        self.word_display = None
 
-class WORD_TYPE(object):
-    BEFORE_COMMA = 'before_comma'
-    SPACE = 'space'
-    SENTENCE_END = 'sentence_end'
-    SENTENCE_BEGIN = 'sentence_begin'
-    NORMAL = 'normal'
+    def display_word(self, word):
+        if self.word_display is not None:
+            self.word_display.exit()
+
+        marker_line = self.format_insert_line(self.focus_column)
+        word_line = self.format_word_line(self.focus_column, word)
+
+        self.word_display = contextutils.WithContext(self.writer.write(marker_line + '\n' + word_line + '\n'))
+        self.word_display.enter()
+
+    def show_sentence(self, sentence):
+        if self.word_display is not None:
+            self.word_display.exit()
+        print sentence
+
+    def format_insert_line(self, focus_column):
+        return ' ' * (focus_column) + 'v'
+
+    def format_word_line(self, focus_column, word):
+        term = self.term
+        focus_char = Speedread.find_focus_char(word)
+        space = ''.join([' '] * (focus_column - focus_char))
+        return termutils.DecoratedText(term, [space, word[:focus_char], (term.bold, word[focus_char]), word[focus_char + 1:]])
+
+class Pusher(object):
+    def __init__(self, reader, display, word_period):
+        self.reader = reader
+        self.display = display
+        self.word_period = word_period
+        self.q = Queue.Queue()
+        self.lock = threading.RLock()
+
+    def back_sentence(self):
+        with self.lock:
+            self.reader.forward_sentence(reverse=True)
+
+    def back_two_sentences(self):
+        with self.lock:
+            self.reader.forward_sentence(reverse=True, count=2)
+
+    def forward_sentence(self):
+        with self.lock:
+            self.reader.forward_sentence()
+
+    def show_sentence(self):
+
+        with self.lock:
+            self.display.show_sentence(self.reader.current_sentence())
+
+    def run(self):
+        while True:
+            with self.lock:
+                word_info = self.reader.get_word()
+
+            if word_info is None:
+                return
+            else:
+                self.display.display_word(word_info.word)
+                delay = Speedread.word_multiple(word_info.type, word_info.word) * self.word_period
+                time.sleep(delay)
 
 class Reader(object):
     def __init__(self, stream):
@@ -159,6 +206,7 @@ class Reader(object):
         return word_info
 
 class SentenceTracker(object):
+    "Keep track of sentences that we have read but not yet displayed"
     def __init__(self):
         self._sentences_by_last_id = dict()
         self._current_sentence_parts = []
@@ -185,94 +233,6 @@ class SentenceTracker(object):
             if end_id > word_id:
                 return sentence
 
-WordInfo = collections.namedtuple('WordInfo', 'id type word sep')
-
-class Pusher(object):
-    def __init__(self, reader, display, word_period):
-        self.reader = reader
-        self.display = display
-        self.word_period = word_period
-        self.q = Queue.Queue()
-        self.lock = threading.RLock()
-
-    def back_sentence(self):
-        with self.lock:
-            self.reader.forward_sentence(reverse=True)
-
-    def back_two_sentences(self):
-        with self.lock:
-            self.reader.forward_sentence(reverse=True, count=2)
-
-    def forward_sentence(self):
-        with self.lock:
-            self.reader.forward_sentence()
-
-    def show_sentence(self):
-
-        with self.lock:
-            self.display.show_sentence(self.reader.current_sentence())
-
-    def run(self):
-        while True:
-            with self.lock:
-                word_info = self.reader.get_word()
-
-            if word_info is None:
-                return
-            else:
-                self.display.display_word(word_info.word)
-                delay = word_multiple(word_info.type, word_info.word) * self.word_period
-                time.sleep(delay)
-
-def word_multiple(word_type, word):
-    word_scaling = math.sqrt(len(word)) / math.sqrt(4)
-    return {
-        WORD_TYPE.BEFORE_COMMA: 2,
-        WORD_TYPE.SENTENCE_BEGIN: 3,
-        WORD_TYPE.NORMAL: word_scaling,
-        WORD_TYPE.SENTENCE_END: word_scaling
-    }[word_type]
-
-
-class Display(object):
-    def __init__(self, term, writer):
-        self.q = Queue.Queue()
-        self.focus_column = 10
-        self.term = term
-        self.writer = writer
-        self.word_display = None
-
-    def display_word(self, word):
-        if self.word_display is not None:
-            self.word_display.exit()
-
-        marker_line = self.format_insert_line(self.focus_column)
-        word_line = self.format_word_line(self.focus_column, word)
-
-        self.word_display = contextutils.WithContext(self.writer.write(marker_line + '\n' + word_line + '\n'))
-        self.word_display.enter()
-
-    def show_sentence(self, sentence):
-        if self.word_display is not None:
-            self.word_display.exit()
-        print sentence
-
-    def format_insert_line(self, focus_column):
-        return ' ' * (focus_column) + 'v'
-
-    def format_word_line(self, focus_column, word):
-        term = self.term
-        focus_char = find_focus_char(word)
-        space = ''.join([' '] * (focus_column - focus_char))
-        return termutils.DecoratedText(term, [space, word[:focus_char], (term.bold, word[focus_char]), word[focus_char + 1:]])
-
-
-def find_focus_char(word):
-    if len(word) > 13:
-        return 4
-    else:
-        return (0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3)[len(word)]
-
 class WordClassifier(object):
     "Classify types of word"
 
@@ -297,6 +257,52 @@ class WordClassifier(object):
                 return WORD_TYPE.SENTENCE_BEGIN
             else:
                 return WORD_TYPE.NORMAL
+
+class WORD_TYPE(object):
+    BEFORE_COMMA = 'before_comma'
+    SPACE = 'space'
+    SENTENCE_END = 'sentence_end'
+    SENTENCE_BEGIN = 'sentence_begin'
+    NORMAL = 'normal'
+
+
+class Speedread(object):
+    "Purish logic related to the algorithm"
+    @staticmethod
+    def find_focus_char(word):
+        if len(word) > 13:
+            return 4
+        else:
+            return (0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3)[len(word)]
+
+    @staticmethod
+    def word_multiple(word_type, word):
+        word_scaling = math.sqrt(len(word)) / math.sqrt(4)
+        return {
+            WORD_TYPE.BEFORE_COMMA: 2,
+            WORD_TYPE.SENTENCE_BEGIN: 3,
+            WORD_TYPE.NORMAL: word_scaling,
+            WORD_TYPE.SENTENCE_END: word_scaling
+        }[word_type]
+
+
+def spawn(f):
+    t = threading.Thread(target=f)
+    t.setDaemon(True)
+    t.start()
+    return t
+
+def re_partition(text, match_re):
+    "Like str.partition by uses a regular expression for splitting"
+    full_re = '(.*?)({})(.*)'.format(match_re)
+    match = re.search(full_re, text)
+    if match:
+        return match.group(1), match.group(2), match.group(3)
+    else:
+        return text, None, ''
+
+WordInfo = collections.namedtuple('WordInfo', 'id type word sep')
+
 
 if __name__ == '__main__':
     main()
