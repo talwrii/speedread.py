@@ -11,7 +11,7 @@ import blessings
 import readchar
 
 import seeksearch
-import display
+import termutils
 import contextutils
 
 PARSER = argparse.ArgumentParser(description='')
@@ -35,9 +35,9 @@ def main():
         term = blessings.Terminal()
 
         if args.disable_clear:
-            writer = display.NonclearingWriter(sys.stdout)
+            writer = termutils.NonclearingWriter(sys.stdout)
         else:
-            writer = display.ClearingWriter(sys.stdout, term)
+            writer = termutils.ClearingWriter(sys.stdout, term)
 
         display = Display(term, writer)
 
@@ -264,7 +264,7 @@ class Display(object):
         term = self.term
         focus_char = find_focus_char(word)
         space = ''.join([' '] * (focus_column - focus_char))
-        return display.DecoratedText(term, [space, word[:focus_char], (term.bold, word[focus_char]), word[focus_char + 1:]])
+        return termutils.DecoratedText(term, [space, word[:focus_char], (term.bold, word[focus_char]), word[focus_char + 1:]])
 
 
 def find_focus_char(word):
