@@ -1,6 +1,6 @@
 import argparse
+import collections
 import contextlib
-import itertools
 import math
 import Queue
 import re
@@ -10,14 +10,15 @@ import time
 
 import blessings
 import readchar
+
 import seeksearch
 
 PARSER = argparse.ArgumentParser(description='')
 PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
 PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
+PARSER.add_argument('--disable-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
 PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
 PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
-
 
 
 def spawn(f):
@@ -31,7 +32,14 @@ def main():
     with open(args.filename) as f:
         reader = Reader(f)
 
-        display = Display()
+        term = blessings.Terminal()
+
+        if args.disable_clear:
+            writer = NonclearingWriter(sys.stdout)
+        else:
+            writer = ClearingWriter(sys.stdout, term)
+
+        display = Display(term, writer)
 
         pusher = Pusher(reader, display, 60. / args.wpm )
         controller = Controller(pusher, display)
@@ -39,7 +47,7 @@ def main():
         if args.no_controls:
             pusher.run()
         else:
-            push_thread = spawn(pusher.run)
+            spawn(pusher.run)
             controller.run()
 
 class Controller(object):
@@ -59,6 +67,8 @@ class Controller(object):
     def run(self):
         while True:
             COMMANDS = {
+                's': self.pusher.show_sentence,
+                #'p': self.pusher.show_paragraph,
                 'b': self.pusher.back_sentence,
                 'f': self.pusher.forward_sentence,
                 'j': self.speed_up,
@@ -87,52 +97,95 @@ def re_partition(text, match_re):
         return text, None, ''
 
 class WORD_TYPE(object):
-    COMMA = 'comma'
+    BEFORE_COMMA = 'before_comma'
     SPACE = 'space'
-    SENTENCE = 'sentence'
+    SENTENCE_END = 'sentence_end'
+    SENTENCE_BEGIN = 'sentence_begin'
+    NORMAL = 'normal'
 
 class Reader(object):
     def __init__(self, stream):
         self.stream = stream
-        self.line_words = None
+        self._read_ahead_words = collections.deque()
+        self.word_classifier = WordClassifier()
+        self.sentence_tracker = SentenceTracker()
+        self.read_word_id = 0
+        self.displayed_word_id = 0
 
     def forward_sentence(self, count=1, reverse=False):
         with seeksearch.save_excursion(self.stream):
             index = seeksearch.seek_find(self.stream, '.', count=count, reverse=reverse)
 
         if index != -1:
-            self.line_words = []
+            self._read_ahead_words = collections.deque()
+            self.read_word_id = 0
+            self.sentence_tracker.reset()
             self.stream.seek(index)
 
+    def current_sentence(self):
+        while True:
+            sentence = self.sentence_tracker.get_sentence(self.displayed_word_id)
+            if sentence:
+                return sentence
+            self.read_line()
+
+    def read_line(self):
+        line = self.stream.readline().decode('utf8')
+        if not line:
+            return None, None
+
+        rest = line
+        while True:
+            word, sep, rest = re_partition(rest, '[, ;.]+')
+            self.read_word_id += 1
+            word_type = self.word_classifier.read_ahead_word(word, sep)
+            word_info = WordInfo(id=self.read_word_id, type=word_type, word=word.strip(), sep=sep)
+
+            self.sentence_tracker.read_ahead_word(word_info)
+
+            if word.strip():
+                self._read_ahead_words.append(word_info)
+
+            if sep is None:
+                break
+
     def get_word(self):
-        while not self.line_words:
-            self.line_words = []
-            line = self.stream.readline().decode('utf8')
-            if not line:
-                return None, None
+        while not self._read_ahead_words:
+            self.read_line()
+        word_info = self._read_ahead_words.popleft()
+        self.displayed_word_id = word_info.id
+        self.sentence_tracker.word_displayed(word_info)
 
-            rest = line
-            while True:
-                word, sep, rest = re_partition(rest, '[, ;.]+')
-                if sep is None:
-                    word_type = WORD_TYPE.SENTENCE
-                elif ',' in sep or ';' in sep:
-                    word_type = WORD_TYPE.COMMA
-                elif '.' in sep:
-                    word_type = WORD_TYPE.SENTENCE
-                else:
-                    word_type = WORD_TYPE.SPACE
+        return word_info
 
-                if word.strip():
-                    self.line_words.append((word_type, word.strip()))
+class SentenceTracker(object):
+    def __init__(self):
+        self._sentences_by_last_id = dict()
+        self._current_sentence_parts = []
 
-                if sep is None:
-                    break
+    def read_ahead_word(self, word_info):
+        self._current_sentence_parts.append(word_info.word)
+        if word_info.sep:
+            self._current_sentence_parts.append(word_info.sep)
 
-            self.line_words = list(reversed(self.line_words))
+        if word_info.type == WORD_TYPE.SENTENCE_END:
+            sentence = ''.join(self._current_sentence_parts)
+            self._sentences_by_last_id[word_info.id] = sentence
+            self._current_sentence_parts = []
 
-        return self.line_words.pop()
+    def word_displayed(self, word_info):
+        if word_info.id in self._sentences_by_last_id:
+            self._sentences_by_last_id.pop(word_info.id)
 
+    def reset(self):
+        self._sentences_by_last_id = dict()
+
+    def get_sentence(self, word_id):
+        for end_id, sentence in sorted(self._sentences_by_last_id.items()):
+            if end_id > word_id:
+                return sentence
+
+WordInfo = collections.namedtuple('WordInfo', 'id type word sep')
 
 class Pusher(object):
     def __init__(self, reader, display, word_period):
@@ -140,36 +193,49 @@ class Pusher(object):
         self.display = display
         self.word_period = word_period
         self.q = Queue.Queue()
+        self.lock = threading.RLock()
 
     def back_sentence(self):
-        self.reader.forward_sentence(reverse=True)
+        with self.lock:
+            self.reader.forward_sentence(reverse=True)
 
     def back_two_sentences(self):
-        self.reader.forward_sentence(reverse=True, count=2)
+        with self.lock:
+            self.reader.forward_sentence(reverse=True, count=2)
 
     def forward_sentence(self):
-        self.reader.forward_sentence()
+        with self.lock:
+            self.reader.forward_sentence()
+
+    def show_sentence(self):
+
+        with self.lock:
+            self.display.show_sentence(self.reader.current_sentence())
 
     def run(self):
         while True:
-            word_type, word = self.reader.get_word()
-            if word is None:
+            with self.lock:
+                word_info = self.reader.get_word()
+
+            if word_info is None:
                 return
             else:
-                with self.display.display_word(word):
-                    delay = word_multiple(word_type, word) * self.word_period
-                    time.sleep(delay)
+                self.display.display_word(word_info.word)
+                delay = word_multiple(word_info.type, word_info.word) * self.word_period
+                time.sleep(delay)
 
 def word_multiple(word_type, word):
+    word_scaling = math.sqrt(len(word)) / math.sqrt(4)
     return {
-        WORD_TYPE.COMMA: 2,
-        WORD_TYPE.SENTENCE: 3,
-        WORD_TYPE.SPACE: math.sqrt(len(word)) / math.sqrt(4)
+        WORD_TYPE.BEFORE_COMMA: 2,
+        WORD_TYPE.SENTENCE_BEGIN: 3,
+        WORD_TYPE.NORMAL: word_scaling,
+        WORD_TYPE.SENTENCE_END: word_scaling
     }[word_type]
 
 
-
 class DecoratedText(object):
+    "A str-like object with blessings decoration"
     # DecoratedText(term, (term.bold, 'THis is bold'), (None, 'This is not bold'))
     def __init__(self, term, format_pairs):
         self.format_pairs = [ (None, x) if isinstance(x, (str, unicode)) else x for x in format_pairs ]
@@ -179,14 +245,14 @@ class DecoratedText(object):
         first_pairs, second_pairs  = [], []
         accum = first_pairs
         ret_sep = None
-        for format, text in self.format_pairs:
+        for fmt, text in self.format_pairs:
             if sep in text:
                 first, ret_sep, second = text.partition(sep)
-                accum.append((format, first))
+                accum.append((fmt, first))
                 accum = second_pairs
-                accum.append((format, second))
+                accum.append((fmt, second))
             else:
-                accum.append((format, text))
+                accum.append((fmt, text))
 
         return DecoratedText(self.term, first_pairs), ret_sep, DecoratedText(self.term, second_pairs)
 
@@ -207,14 +273,14 @@ class DecoratedText(object):
     def __radd__(self, other):
         return DecoratedText(self.term, [other] + self.format_pairs)
 
-
 class NonclearingWriter(object):
     def __init__(self, stream):
         self.stream = stream
 
     @contextlib.contextmanager
     def write(self, text):
-        self.stream.write(unicode(text))
+        # readchar switches off linefeeds (I think)
+        self.stream.write(unicode(text).replace('\n', '\r\n'))
         self.stream.flush()
         yield
 
@@ -262,18 +328,62 @@ class ClearingWriter(object):
             self._write(self.term.move_left)
 
 
+def enter_manager(m):
+    def inner():
+        with m:
+            yield
+    x = inner()
+    x.next()
+    return x
+
+def leave_context(c):
+    try:
+        c.next
+    except StopIteration:
+        pass
+
+class WithContext(object):
+    """Iteract with a context manager without using
+    __ methods and out side of a block"""
+
+    def __init__(self, manager):
+        self.manager = manager
+        self.it = None
+
+    def enter(self):
+        def inner():
+            with self.manager:
+                yield
+        self.it = inner()
+        self.it.next()
+
+    def exit(self):
+        for _ in self.it:
+            pass
+
+
 class Display(object):
-    def __init__(self):
+    def __init__(self, term, writer):
         self.q = Queue.Queue()
         self.focus_column = 10
-        self.term = blessings.Terminal()
-        #self.writer = NonclearingWriter(sys.stdout)
-        self.writer = ClearingWriter(sys.stdout, self.term)
+        self.term = term
+        self.writer = writer
+        self.word_display = None
 
     def display_word(self, word):
+        if self.word_display is not None:
+            self.word_display.exit()
+
         marker_line = self.format_insert_line(self.focus_column)
         word_line = self.format_word_line(self.focus_column, word)
-        return self.writer.write(marker_line + '\n' + word_line + '\n')
+
+        self.word_display = WithContext(self.writer.write(marker_line + '\n' + word_line + '\n'))
+        self.word_display.enter()
+
+    def show_sentence(self, sentence):
+        if self.word_display is not None:
+            self.word_display.exit()
+        print sentence
 
     def format_insert_line(self, focus_column):
         return ' ' * (focus_column) + 'v'
@@ -284,14 +394,41 @@ class Display(object):
         space = ''.join([' '] * (focus_column - focus_char))
         return DecoratedText(term, [space, word[:focus_char], (term.bold, word[focus_char]), word[focus_char + 1:]])
 
+
 def find_focus_char(word):
     if len(word) > 13:
         return 4
     else:
         return (0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3)[len(word)]
 
-def find_word_delay_factor(word):
-    return 1
+class WordClassifier(object):
+    "Classify types of word"
+
+    def __init__(self):
+        self.last_word_type = None
+
+    def read_ahead_word(self, word, sep):
+        word_type = self._get_word_type(word, sep, self.last_word_type)
+        self.last_word_type = word_type
+        return word_type
+
+    @staticmethod
+    def _get_word_type(word, sep, last_word_type):
+        if sep is None:
+            return WORD_TYPE.NORMAL
+        elif ',' in sep or ';' in sep:
+            return WORD_TYPE.BEFORE_COMMA
+        elif '.' in sep:
+            return WORD_TYPE.SENTENCE_END
+        else:
+            if last_word_type == WORD_TYPE.SENTENCE_END:
+                return WORD_TYPE.SENTENCE_BEGIN
+            else:
+                return WORD_TYPE.NORMAL
+
+
+
+
 
 if __name__ == '__main__':
     main()
