@@ -12,6 +12,7 @@ import readchar
 
 import seeksearch
 import display
+import contextutils
 
 PARSER = argparse.ArgumentParser(description='')
 PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
@@ -233,27 +234,6 @@ def word_multiple(word_type, word):
     }[word_type]
 
 
-
-class WithContext(object):
-    """Iteract with a context manager without using
-    __ methods and out side of a block"""
-
-    def __init__(self, manager):
-        self.manager = manager
-        self.it = None
-
-    def enter(self):
-        def inner():
-            with self.manager:
-                yield
-        self.it = inner()
-        self.it.next()
-
-    def exit(self):
-        for _ in self.it:
-            pass
-
-
 class Display(object):
     def __init__(self, term, writer):
         self.q = Queue.Queue()
@@ -269,7 +249,7 @@ class Display(object):
         marker_line = self.format_insert_line(self.focus_column)
         word_line = self.format_word_line(self.focus_column, word)
 
-        self.word_display = WithContext(self.writer.write(marker_line + '\n' + word_line + '\n'))
+        self.word_display = contextutils.WithContext(self.writer.write(marker_line + '\n' + word_line + '\n'))
         self.word_display.enter()
 
     def show_sentence(self, sentence):
@@ -317,10 +297,6 @@ class WordClassifier(object):
                 return WORD_TYPE.SENTENCE_BEGIN
             else:
                 return WORD_TYPE.NORMAL
-
-
-
-
 
 if __name__ == '__main__':
     main()
