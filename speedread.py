@@ -62,14 +62,25 @@ class Controller(object):
         's': cls.show_sentence,
         'b': cls.back_sentence,
         'f': cls.forward_sentence,
+        'w': cls.forward_word,
         'j': cls.speed_up,
         'k': cls.slow_down,
         'h': cls.show_bindings,
+        ' ': cls.pause,
         '\x03': cls.exit}
+
+
+    def pause(self):
+        "Pause display"
+        self.pusher.toggle_pause()
 
     def exit(self):
         "Exit"
         sys.exit()
+
+    def forward_word(self):
+        "Move a word forward"
+        self.pusher.forward_word()
 
     def show_sentence(self):
         "Show the current sentence"
@@ -90,7 +101,8 @@ class Controller(object):
 
     def back_sentence(self):
         "Move to the previous sentene"
-        if self.back_pressed_time and time.time() - self.back_pressed_time < 0.1:
+        print self.back_pressed_time
+        if self.back_pressed_time and time.time() - self.back_pressed_time < 0.5:
             self.pusher.back_two_sentences()
             self.back_pressed_time = None
         else:
@@ -164,18 +176,30 @@ class Pusher(object):
         self.word_period = word_period
         self.q = Queue.Queue()
         self.lock = threading.RLock()
+        self.playing = threading.Event()
+        self.playing.set()
+        self.ticker = Ticker()
 
     def back_sentence(self):
+        self.display.write_text('Back')
         with self.lock:
             self.reader.forward_sentence(reverse=True)
+            self.ticker.tick()
 
     def back_two_sentences(self):
+        self.display.write_text('Back two')
         with self.lock:
             self.reader.forward_sentence(reverse=True, count=2)
+            self.ticker.tick()
 
     def forward_sentence(self):
         with self.lock:
             self.reader.forward_sentence()
+            self.ticker.tick()
+
+    def forward_word(self):
+        with self.lock:
+            self.ticker.tick()
 
     def show_sentence(self):
         with self.lock:
@@ -189,17 +213,85 @@ class Pusher(object):
         with self.lock:
             self.display.write_text(text)
 
+    def toggle_pause(self):
+        with self.lock:
+            self.playing = not self.playing
+            if self.playing:
+                self.ticker.tick()
+            else:
+                self.ticker.clear()
+
     def run(self):
+        spawn(self.ticker.expire_loop)
         while True:
             with self.lock:
                 word_info = self.reader.get_word()
+                if word_info is None:
+                    return
+                else:
+                    self.display.display_word(word_info.word)
 
-            if word_info is None:
-                return
-            else:
-                self.display.display_word(word_info.word)
                 delay = Speedread.word_multiple(word_info.type, word_info.word) * self.word_period
-                time.sleep(delay)
+
+                if self.playing:
+                    self.ticker.set_delay(delay)
+
+            self.ticker.wait()
+
+            with self.lock:
+                self.ticker.clear()
+
+class Ticker(object):
+    CLEAR = 'clear'
+    def __init__(self):
+        self.expired = threading.Event()
+        self.expires = []
+        self.q = Queue.Queue()
+
+    def expire_loop(self):
+        while True:
+            if self.expires:
+                timeout = min(self.expires) - time.time()
+            else:
+                timeout = None
+
+            try:
+                if timeout is None or timeout > 0:
+                    new_expires = self.q.get(timeout=timeout, block=True)
+                else:
+                    new_expires = None
+            except Queue.Empty:
+                pass
+
+            if new_expires is not None:
+                self.expires.append(new_expires)
+                self.expired.clear()
+
+            if new_expires == self.CLEAR:
+                self.expires = []
+                self.expired.clear()
+
+            if self.expires and (min(self.expires) < time.time()):
+                self.expired.set()
+                self.expires = []
+
+    def set_delay(self, delay):
+        self.q.put(time.time() + delay)
+
+    def tick(self):
+        self.q.put(time.time())
+
+    def clear(self):
+        self.q.put(self.CLEAR)
+
+    def wait(self):
+        self.expired.wait()
+
+
+
+
+
+
 
 class Reader(object):
     def __init__(self, stream):
@@ -227,6 +319,12 @@ class Reader(object):
                 return sentence
             self.read_line()
 
+    def current_paragraph(self):
+        while True:
+            paragraph = self.paragraph_tracker.get_sentence(self.displayed_word_id)
+            if paragraph:
+                return paragraph
+
     def read_line(self):
         line = self.stream.readline().decode('utf8')
         if not line:
@@ -237,7 +335,8 @@ class Reader(object):
             word, sep, rest = re_partition(rest, '[, ;.]+')
             self.read_word_id += 1
             word_type = self.word_classifier.read_ahead_word(word, sep)
-            word_info = WordInfo(id=self.read_word_id, type=word_type, word=word.strip(), sep=sep)
+            word_text = word.strip() + (sep if sep != ' ' and sep is not None else '')
+            word_info = WordInfo(id=self.read_word_id, type=word_type, word=word_text, sep=sep)
 
             self.sentence_tracker.read_ahead_word(word_info)
 
