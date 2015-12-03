@@ -15,7 +15,16 @@ import termutils
 import contextutils
 
 def main():
+    bindings_help = Controller.bindings_help()
+
+    PARSER = argparse.ArgumentParser(description='', epilog=bindings_help, formatter_class=argparse.RawTextHelpFormatter)
+    PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
+    PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
+    PARSER.add_argument('--disable-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
+    PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
+    PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
     args = PARSER.parse_args()
+
     with open(args.filename) as f:
         reader = Reader(f)
         term = blessings.Terminal()
@@ -36,14 +45,51 @@ def main():
             spawn(pusher.run)
             controller.run()
 
+
+def format_keybinding(c):
+    alphabet = "abcdefghijklmnopqrstuvwxyz"
+    if ord(c) in range(1, 27):
+        return "C-" + alphabet[ord(c) - 1]
+    else:
+        return c
+
 class Controller(object):
     "Perform operations in response to key presses"
+
+    @classmethod
+    def commands(cls):
+        return {
+        's': cls.show_sentence,
+        'b': cls.back_sentence,
+        'f': cls.forward_sentence,
+        'j': cls.speed_up,
+        'k': cls.slow_down,
+        'h': cls.show_bindings,
+        '\x03': cls.exit}
+
+    def exit(self):
+        "Exit"
+        sys.exit()
+
+    def show_sentence(self):
+        "Show the current sentence"
+        self.pusher.show_sentence()
+
+    def show_paragraph(self):
+        "Show the current paragraph"
+        self.pusher.show_paragraph()
+
+    def forward_sentence(self):
+        "Move forward a sentence"
+        self.pusher.forward_sentence()
+
     def __init__(self, pusher, display):
         self.pusher = pusher
         self.display = display
         self.back_pressed_time = None
 
     def back_sentence(self):
+        "Move to the previous sentene"
         if self.back_pressed_time and time.time() - self.back_pressed_time < 0.1:
             self.pusher.back_two_sentences()
             self.back_pressed_time = None
@@ -51,35 +97,32 @@ class Controller(object):
             self.back_pressed_time = time.time()
             self.pusher.back_sentence()
 
+    def show_bindings(self):
+        self.pusher.display_text(self.bindings_help())
+
+    @classmethod
+    def bindings_help(cls):
+        result = []
+        for key, value in cls.commands().items():
+            result.append("{} - {}".format(format_keybinding(key), value.__doc__))
+        return '\n'.join(result)
+
     def run(self):
+        commands = self.commands()
         while True:
-            COMMANDS = {
-                's': self.pusher.show_sentence,
-                #'p': self.pusher.show_paragraph,
-                'b': self.pusher.back_sentence,
-                'f': self.pusher.forward_sentence,
-                'j': self.speed_up,
-                'k': self.slow_down,
-                '\x03': sys.exit
-            }
             char = readchar.readchar()
-            method = COMMANDS.get(char)
+            method = commands.get(char)
             if method:
-                method()
+                method(self)
 
     def speed_up(self):
+        "Show words faster"
         # Should really be locked
         self.pusher.word_period *= 0.9
 
     def slow_down(self):
+        "Show words more slowly"
         self.pusher.word_period /= 0.9
-
-PARSER = argparse.ArgumentParser(description='')
-PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
-PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
-PARSER.add_argument('--disable-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
-PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
-PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
 
 class Display(object):
     def __init__(self, term, writer):
@@ -99,10 +142,11 @@ class Display(object):
         self.word_display = contextutils.WithContext(self.writer.write(marker_line + '\n' + word_line + '\n'))
         self.word_display.enter()
 
-    def show_sentence(self, sentence):
+    def write_text(self, text):
         if self.word_display is not None:
             self.word_display.exit()
-        print sentence
+
+        print text
 
     def format_insert_line(self, focus_column):
         return ' ' * (focus_column) + 'v'
@@ -134,9 +178,16 @@ class Pusher(object):
             self.reader.forward_sentence()
 
     def show_sentence(self):
-
         with self.lock:
-            self.display.show_sentence(self.reader.current_sentence())
+            self.display.write_text(self.reader.current_sentence())
+
+    def show_paragraph(self):
+        with self.lock:
+            self.display.write_text(self.reader.current_paragraph())
+
+    def display_text(self, text):
+        with self.lock:
+            self.display.write_text(text)
 
     def run(self):
         while True:
