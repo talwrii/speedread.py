@@ -420,7 +420,7 @@ class Speedread(object):
 
     @staticmethod
     def word_multiple(word_type, word):
-        word_scaling = math.sqrt(len(word)) / math.sqrt(4)
+        word_scaling = 1 + math.sqrt(len(word)) / math.sqrt(4)
         return {
             WORD_TYPE.BEFORE_COMMA: 2,
             WORD_TYPE.SENTENCE_BEGIN: 3,
