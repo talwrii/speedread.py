@@ -174,10 +174,8 @@ class Pusher(object):
         self.reader = reader
         self.display = display
         self.word_period = word_period
-        self.q = Queue.Queue()
         self.lock = threading.RLock()
-        self.playing = threading.Event()
-        self.playing.set()
+        self.playing = True
         self.ticker = Ticker()
 
     def back_sentence(self):
@@ -286,11 +284,6 @@ class Ticker(object):
 
     def wait(self):
         self.expired.wait()
-
-
-
-
-
 
 
 class Reader(object):
