@@ -32,19 +32,42 @@ def rread_chunks(stream, size, overlap):
         else:
             yield (chunk_start, chunk + old_chunk[:overlap])
 
+def enumerate_in_chunk(chunk, needle, reverse=False):
+    chunk_searcher = search_string_backward if reverse else search_string_forward
+
+    pos = None
+    while True:
+        pos = chunk_searcher(chunk, needle, pos)
+        if pos == -1:
+            break
+        else:
+            yield pos
+
+
+
 def seek_find(stream, needle, chunk_size=1000, count=1, reverse=False):
     num_found = 0
     chunk_reader = rread_chunks if reverse else read_chunks
-    chunk_searcher = str.rfind if reverse else str.find
-    for start, chunk in chunk_reader(stream, chunk_size, len(needle)):
-        pos = chunk_searcher(chunk, needle)
-        if pos != -1:
-            num_found += 1
 
-        if num_found == count:
-            return start + pos
+    for start, chunk in chunk_reader(stream, chunk_size, len(needle)):
+        for pos in enumerate_in_chunk(chunk, needle, reverse=reverse):
+            num_found += 1
+            if num_found == count:
+                return start + pos
     else:
         return -1
+
+def search_string_forward(string, needle, start):
+    if start is None:
+        return string.find(needle)
+    else:
+        return string.find(needle, start + 1)
+
+def search_string_backward(string, needle, end):
+    if end is None:
+        return string.rfind(needle)
+    else:
+        return string.rfind(needle, 0, end)
 
 
 @contextlib.contextmanager
