@@ -91,5 +91,4 @@ if __name__ == '__main__':
     with open(args.file) as f:
         if args.start_pos:
             f.seek(args.start_pos)
-        method = seek_rfind if args.reverse else seek_find
-        print method(f, args.needle, chunk_size=args.chunk_size)
+        print seek_find(f, args.needle, chunk_size=args.chunk_size, reverse=args.reverse)
