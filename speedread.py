@@ -32,6 +32,7 @@ def main():
     PARSER.add_argument('--no-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
     PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
     PARSER.add_argument('--offset', type=int, help='Start reading rom a character offset', default=0)
+    PARSER.add_argument('--script', type=str, help='Carry out a sequence of commands (e.g. for testing)', default=None)
 
     PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
     args = PARSER.parse_args()
@@ -47,7 +48,10 @@ def main():
 
         display = Display(term, writer)
 
-        pusher = Pusher(reader, display, 60. / args.wpm )
+        playing = not args.script
+
+        pusher = Pusher(reader, display, 60. / args.wpm, playing=playing)
+
         controller = Controller(pusher, display)
 
         pusher.seek(args.offset)
@@ -56,7 +60,7 @@ def main():
             pusher.run()
         else:
             asyncutils.spawn(pusher.run)
-            controller.run()
+            controller.run(script=args.script)
 
 def format_keybinding(c):
     alphabet = "abcdefghijklmnopqrstuvwxyz"
@@ -134,14 +138,21 @@ class Controller(object):
             result.append("{} - {}".format(format_keybinding(key), value.__doc__))
         return '\n'.join(result)
 
-    def run(self):
+    def run(self, script=None):
         self.display.set_wpm(60 / self.pusher.word_period)
-        commands = self.commands()
+
+        if script:
+            for key in script:
+                self.handle_key(key)
+
         while True:
-            char = readchar.readchar()
-            method = commands.get(char)
-            if method:
-                method(self)
+            self.handle_key(readchar.readchar())
+
+    def handle_key(self, char):
+        commands = self.commands()
+        method = commands.get(char)
+        if method:
+            method(self)
 
     def speed_up(self):
         "Show words faster"
@@ -192,12 +203,12 @@ class Display(object):
         return termutils.DecoratedText(term, [space, word[:focus_char], (term.bold, word[focus_char]), word[focus_char + 1:]])
 
 class Pusher(object):
-    def __init__(self, reader, display, word_period):
+    def __init__(self, reader, display, word_period, playing=True):
         self.reader = reader
         self.display = display
         self.word_period = word_period
         self.lock = threading.RLock()
-        self.playing = True
+        self.playing = playing
         self.timer = asyncutils.Timer()
 
     def back_sentence(self):
