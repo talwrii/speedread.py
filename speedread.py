@@ -14,13 +14,17 @@ import seeksearch
 import termutils
 import contextutils
 
+def Paragraph(word_id, offset):
+    return WordInfo(id=word_id, offset=offset, word=u'¶', type=WORD_TYPE.PARAGRAPH, sep=None)
+
 def main():
     bindings_help = Controller.bindings_help()
+
 
     PARSER = argparse.ArgumentParser(description='', epilog=bindings_help, formatter_class=argparse.RawTextHelpFormatter)
     PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
     PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
-    PARSER.add_argument('--disable-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
+    PARSER.add_argument('--no-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
     PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
     PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
     args = PARSER.parse_args()
@@ -29,7 +33,7 @@ def main():
         reader = Reader(f)
         term = blessings.Terminal()
 
-        if args.disable_clear:
+        if args.no_clear:
             writer = termutils.NonclearingWriter(sys.stdout)
         else:
             writer = termutils.ClearingWriter(sys.stdout, term)
@@ -44,7 +48,6 @@ def main():
         else:
             spawn(pusher.run)
             controller.run()
-
 
 def format_keybinding(c):
     alphabet = "abcdefghijklmnopqrstuvwxyz"
