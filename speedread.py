@@ -16,6 +16,7 @@ import seeksearch
 import termutils
 import textutils
 from textutils import WORD_TYPE, WordInfo
+import asyncutils
 
 
 PARAGRAPH = WordInfo(id=None, offset=None, word=u'¶', type=WORD_TYPE.PARAGRAPH, sep=None)
@@ -54,7 +55,7 @@ def main():
         if args.no_controls:
             pusher.run()
         else:
-            spawn(pusher.run)
+            asyncutils.spawn(pusher.run)
             controller.run()
 
 def format_keybinding(c):
@@ -197,22 +198,22 @@ class Pusher(object):
         self.word_period = word_period
         self.lock = threading.RLock()
         self.playing = True
-        self.ticker = Ticker()
+        self.timer = asyncutils.Timer()
 
     def back_sentence(self):
         with self.lock:
             self.reader.forward_sentence(reverse=True)
-            self.ticker.tick()
+            self.timer.tick()
 
     def back_two_sentences(self):
         with self.lock:
             self.reader.forward_sentence(reverse=True, count=2)
-            self.ticker.tick()
+            self.timer.tick()
 
     def forward_sentence(self):
         with self.lock:
             self.reader.forward_sentence()
-            self.ticker.tick()
+            self.timer.tick()
 
     def show_position(self):
         with self.lock:
@@ -220,7 +221,7 @@ class Pusher(object):
 
     def forward_word(self):
         with self.lock:
-            self.ticker.tick()
+            self.timer.tick()
 
     def show_sentence(self):
         with self.lock:
@@ -242,12 +243,12 @@ class Pusher(object):
         with self.lock:
             self.playing = not self.playing
             if self.playing:
-                self.ticker.tick()
+                self.timer.tick()
             else:
-                self.ticker.clear()
+                self.timer.clear()
 
     def run(self):
-        spawn(self.ticker.expire_loop)
+        asyncutils.spawn(self.timer.expire_loop)
         while True:
             with self.lock:
                 word_info = self.reader.get_word()
@@ -259,58 +260,12 @@ class Pusher(object):
                 delay = Speedread.word_multiple(word_info.type, word_info.word) * self.word_period
 
                 if self.playing:
-                    self.ticker.set_delay(delay)
+                    self.timer.set_delay(delay)
 
-            self.ticker.wait()
+            self.timer.wait()
 
             with self.lock:
-                self.ticker.clear()
-
-class Ticker(object):
-    CLEAR = 'clear'
-    def __init__(self):
-        self.expired = threading.Event()
-        self.expires = []
-        self.q = Queue.Queue()
-
-    def expire_loop(self):
-        while True:
-            if self.expires:
-                timeout = min(self.expires) - time.time()
-            else:
-                timeout = None
-
-            try:
-                if timeout is None or timeout > 0:
-                    new_expires = self.q.get(timeout=timeout, block=True)
-                else:
-                    new_expires = None
-            except Queue.Empty:
-                pass
-
-            if new_expires is not None:
-                self.expires.append(new_expires)
-                self.expired.clear()
-
-            if new_expires == self.CLEAR:
-                self.expires = []
-                self.expired.clear()
-
-            if self.expires and (min(self.expires) < time.time()):
-                self.expired.set()
-                self.expires = []
-
-    def set_delay(self, delay):
-        self.q.put(time.time() + delay)
-
-    def tick(self):
-        self.q.put(time.time())
-
-    def clear(self):
-        self.q.put(self.CLEAR)
-
-    def wait(self):
-        self.expired.wait()
+                self.timer.clear()
 
 
 class Reader(object):
@@ -484,7 +439,6 @@ class WordClassifier(object):
             else:
                 return WORD_TYPE.NORMAL
 
-
 class Speedread(object):
     "Purish logic related to the algorithm"
     @staticmethod
@@ -506,12 +460,6 @@ class Speedread(object):
             WORD_TYPE.PARAGRAPH: 1
         }[word_type]
 
-
-def spawn(f):
-    t = threading.Thread(target=f)
-    t.setDaemon(True)
-    t.start()
-    return t
 
 def utf8len(string):
     return len(string.encode('utf8'))
