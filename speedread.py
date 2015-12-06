@@ -25,12 +25,13 @@ END_OF_FILE = WordInfo(id=None, offset=0, word=u'THE_END', type=WORD_TYPE.END_OF
 def main():
     bindings_help = Controller.bindings_help()
 
-
     PARSER = argparse.ArgumentParser(description='', epilog=bindings_help, formatter_class=argparse.RawTextHelpFormatter)
     PARSER.add_argument('--wpm', '-w', type=float, help='Speed of output in words per minute', default=200.)
     PARSER.add_argument('--debug-print', action='store_true', help='Add pauses between prints to debug printing', default=False)
     PARSER.add_argument('--no-clear', action='store_true', help='Do not clear any printing (for debugging)', default=False)
     PARSER.add_argument('--no-controls', action='store_true', help='Switch off keyboard controls ', default=False)
+    PARSER.add_argument('--offset', type=int, help='Start reading rom a character offset', default=0)
+
     PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
     args = PARSER.parse_args()
 
@@ -47,6 +48,8 @@ def main():
 
         pusher = Pusher(reader, display, 60. / args.wpm )
         controller = Controller(pusher, display)
+
+        pusher.seek(args.offset)
 
         if args.no_controls:
             pusher.run()
@@ -231,6 +234,10 @@ class Pusher(object):
         with self.lock:
             self.display.write_text(text)
 
+    def seek(self, offset):
+        with self.lock:
+            self.reader.seek(offset)
+
     def toggle_pause(self):
         with self.lock:
             self.playing = not self.playing
@@ -325,10 +332,17 @@ class Reader(object):
             index = seeksearch.seek_find(self.stream, '.', count=count, reverse=reverse)
 
         if index != -1:
-            self._read_ahead_words = collections.deque()
-            self.read_word_id = 0
-            self.sentence_tracker.reset()
+            self.flush_cache()
             self.stream.seek(index)
+
+    def flush_cache(self):
+        self._read_ahead_words = collections.deque()
+        self.read_word_id = 0
+        self.sentence_tracker.reset()
+
+    def seek(self, offset):
+        self.stream.seek(offset)
+        self.flush_cache()
 
     def current_sentence(self):
         while True:
