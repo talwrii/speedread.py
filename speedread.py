@@ -312,6 +312,8 @@ class Reader(object):
 
     def forward_sentence(self, count=1, reverse=False):
         with seeksearch.save_excursion(self.stream):
+            # Go to our current position in the file
+            self.stream.seek(self.character_offset())
             index = seeksearch.seek_find(self.stream, '.', count=count, reverse=reverse)
 
         if index != -1:
@@ -326,6 +328,12 @@ class Reader(object):
             if sentence:
                 return sentence
             self.read_line()
+
+    def character_offset(self):
+        if self._read_ahead_words:
+            return self._read_ahead_words[0].offset
+        else:
+            return self.stream.tell()
 
     def current_paragraph(self):
         while True:
