@@ -340,7 +340,7 @@ class Reader(object):
 
     def current_paragraph(self):
         while True:
-            paragraph = self.paragraph_tracker.get_sentence(self.displayed_word_id)
+            paragraph = self.paragraph_tracker.get(self.displayed_word_id)
             if paragraph:
                 return paragraph
 
