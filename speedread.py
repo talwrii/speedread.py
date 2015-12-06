@@ -104,7 +104,6 @@ class Controller(object):
 
     def back_sentence(self):
         "Move to the previous sentene"
-        print self.back_pressed_time
         if self.back_pressed_time and time.time() - self.back_pressed_time < 0.5:
             self.pusher.back_two_sentences()
             self.back_pressed_time = None
@@ -182,13 +181,11 @@ class Pusher(object):
         self.ticker = Ticker()
 
     def back_sentence(self):
-        self.display.write_text('Back')
         with self.lock:
             self.reader.forward_sentence(reverse=True)
             self.ticker.tick()
 
     def back_two_sentences(self):
-        self.display.write_text('Back two')
         with self.lock:
             self.reader.forward_sentence(reverse=True, count=2)
             self.ticker.tick()
