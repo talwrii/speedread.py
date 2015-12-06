@@ -84,6 +84,7 @@ class Controller(object):
         'h': cls.show_bindings,
         'l': cls.show_position,
         ' ': cls.pause,
+        'q': cls.exit,
         '\x03': cls.exit}
 
     def show_position(self):
