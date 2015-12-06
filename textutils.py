@@ -56,12 +56,12 @@ class WordClassifier(object):
         else:
             word_type = self._get_word_type(word_info, self.last_word_type)
         self.last_word_type = word_type
+
         return word_type
 
     @staticmethod
     def _get_word_type(word_info, last_word_type):
         sep = word_info.sep
-
         if word_info.type != WORD_TYPE.UNKNOWN:
             return word_info.type
 

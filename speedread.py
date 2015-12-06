@@ -370,7 +370,10 @@ class Reader(object):
         assert word_info.offset is not None
 
         word_type = self.word_classifier.read_ahead_word(word_info)
-        word_info = word_info._replace(type=word_type)
+        word_info = word_info._replace(type=word_type, id=self.read_word_id)
+        self.read_word_id += 1
+
+        self.sentence_tracker.read_ahead_word(word_info)
         self._read_ahead_words.append(word_info)
 
         self.last_word = word_info
