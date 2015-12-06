@@ -69,9 +69,13 @@ class Controller(object):
         'j': cls.speed_up,
         'k': cls.slow_down,
         'h': cls.show_bindings,
+        'l': cls.show_position,
         ' ': cls.pause,
         '\x03': cls.exit}
 
+    def show_position(self):
+        "Show where we are are in the file/stream"
+        self.pusher.show_position()
 
     def pause(self):
         "Pause display"
@@ -194,6 +198,10 @@ class Pusher(object):
         with self.lock:
             self.reader.forward_sentence()
             self.ticker.tick()
+
+    def show_position(self):
+        with self.lock:
+            self.display.write_text('character:{}'.format(self.reader.character_offset()))
 
     def forward_word(self):
         with self.lock:
