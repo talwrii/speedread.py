@@ -4,7 +4,6 @@ import argparse
 import collections
 import math
 import Queue
-import re
 import sys
 import threading
 import time
@@ -12,12 +11,16 @@ import time
 import blessings
 import readchar
 
+import contextutils
 import seeksearch
 import termutils
-import contextutils
+import textutils
+from textutils import WORD_TYPE, WordInfo
 
-def Paragraph(word_id, offset):
-    return WordInfo(id=word_id, offset=offset, word=u'¶', type=WORD_TYPE.PARAGRAPH, sep=None)
+
+PARAGRAPH = WordInfo(id=None, offset=None, word=u'¶', type=WORD_TYPE.PARAGRAPH, sep=None)
+
+END_OF_FILE = WordInfo(id=None, offset=0, word=u'THE_END', type=WORD_TYPE.END_OF_FILE, sep=None)
 
 def main():
     bindings_help = Controller.bindings_help()
@@ -312,6 +315,8 @@ class Reader(object):
         self.read_word_id = 0
         self.displayed_word_id = 0
         self.preceeding_empty_line = False
+        self.last_line_leftover = ''
+        self.last_word = None
 
     def forward_sentence(self, count=1, reverse=False):
         with seeksearch.save_excursion(self.stream):
@@ -345,41 +350,50 @@ class Reader(object):
                 return paragraph
 
     def read_line(self):
+        line_offset = self.stream.tell()
         line = self.stream.readline().decode('utf8')
-        if not line:
-            return None, None
+        self.last_line_leftover = self.process_line(self.process_word, line_offset, self.last_line_leftover, line)
 
+    @classmethod
+    def process_line(cls, process_word, offset, left_over, line):
+        "Split a line into words and call process_word on each word"
+        line_empty = not line.strip()
 
-        if line.strip() == '':
-            self.preceeding_empty_line = True
+        # Deal with leftover
+        if left_over:
+            if line_empty:
+                # Missing full stop - treat this
+                #   as a paragraph end
+                process_word(WordInfo(word=left_over, type=WORD_TYPE.PARAGRAPH_END, offset=offset - utf8len(left_over + line), id=None, sep=None))
+                return cls.process_line(process_word, offset, '', line)
+            else:
+                # Normal line continuation
+                return cls.process_line(process_word, offset - utf8len(left_over), '', left_over.strip() + ' ' + line)
+        else:
+            if not line: #eof
+                process_word(END_OF_FILE._replace(offset=offset))
+                return ''
+            elif line_empty:
+                process_word(PARAGRAPH._replace(offset=offset))
+                return ''
+            else:
+                words, left_over = textutils.line_to_words(line)
+                for word in words:
+                    process_word(word._replace(offset=offset + word.offset))
+                return left_over
+
+    def process_word(self, word_info):
+        # Omit duplicate paragraphs
+        if self.last_word and word_info.type == self.last_word.type == WORD_TYPE.PARAGRAPH:
             return
 
-        while True:
-            if self.preceeding_empty_line:
-                word_info = Paragraph(self.read_word_id, offset=word_offset)
-                self.read_word_id += 1
-                self.preceeding_empty_line = False
-            else:
-                word, sep, rest = re_partition(rest, u'[, ;.—\-]+')
-                print repr(word), repr(rest), repr(sep)
+        assert word_info.offset is not None
 
-                word_offset = self.stream.tell() - len(self.last_line_leftover.encode('utf8'))
+        word_type = self.word_classifier.read_ahead_word(word_info)
+        word_info = word_info._replace(type=word_type)
+        self._read_ahead_words.append(word_info)
 
-                self.read_word_id += 1
-
-                word_text = word.strip() + (sep if sep != ' ' and sep is not None else '')
-                word_info = WordInfo(id=self.read_word_id, type=WORD_TYPE.UNKNOWN, word=word_text, sep=sep, offset=word_offset)
-
-            word_type = self.word_classifier.read_ahead_word(word_info)
-            word_info = word_info._replace(type=word_type)
-
-            self.sentence_tracker.read_ahead_word(word_info)
-
-            if word_info.type == WORD_TYPE.PARAGRAPH or word_info.word.strip():
-                self._read_ahead_words.append(word_info)
-            else:
-
-            word_offset += len(word.encode('utf8')) + len(sep)
+        self.last_word = word_info
 
     def get_word(self):
         while not self._read_ahead_words:
@@ -431,12 +445,17 @@ class WordClassifier(object):
         if word_info.type == WORD_TYPE.PARAGRAPH:
             word_type = WORD_TYPE.PARAGRAPH
         else:
-            word_type = self._get_word_type(word_info.word, word_info.sep, self.last_word_type)
+            word_type = self._get_word_type(word_info, self.last_word_type)
         self.last_word_type = word_type
         return word_type
 
     @staticmethod
-    def _get_word_type(word, sep, last_word_type):
+    def _get_word_type(word_info, last_word_type):
+        sep = word_info.sep
+
+        if word_info.type != WORD_TYPE.UNKNOWN:
+            return word_info.type
+
         if last_word_type == WORD_TYPE.PARAGRAPH:
             return WORD_TYPE.SENTENCE_BEGIN
         elif sep is None:
@@ -450,15 +469,6 @@ class WordClassifier(object):
                 return WORD_TYPE.SENTENCE_BEGIN
             else:
                 return WORD_TYPE.NORMAL
-
-class WORD_TYPE(object):
-    BEFORE_COMMA = 'before_comma'
-    SPACE = 'space'
-    SENTENCE_END = 'sentence_end'
-    SENTENCE_BEGIN = 'sentence_begin'
-    NORMAL = 'normal'
-    PARAGRAPH = 'special'
-    UNKNOWN = 'unknown'
 
 
 class Speedread(object):
@@ -478,7 +488,8 @@ class Speedread(object):
             WORD_TYPE.SENTENCE_BEGIN: 3,
             WORD_TYPE.NORMAL: word_scaling,
             WORD_TYPE.SENTENCE_END: word_scaling,
-            WORD_TYPE.PARAGRAPH: 4
+            WORD_TYPE.PARAGRAPH_END: 4,
+            WORD_TYPE.PARAGRAPH: 1
         }[word_type]
 
 
@@ -488,17 +499,8 @@ def spawn(f):
     t.start()
     return t
 
-def re_partition(text, match_re):
-    "Like str.partition by uses a regular expression for splitting"
-    full_re = u'(.*?)({})(.*)'.format(match_re)
-    match = re.search(full_re, text)
-    if match:
-        return match.group(1), match.group(2), match.group(3)
-    else:
-        return text, None, ''
-
-WordInfo = collections.namedtuple('WordInfo', 'id type word sep offset')
-
+def utf8len(string):
+    return len(string.encode('utf8'))
 
 if __name__ == '__main__':
     main()
