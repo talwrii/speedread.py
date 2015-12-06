@@ -1,13 +1,13 @@
 
 import unittest
-import textutils
-import speedread
+import speedread.textutils
+import speedread.main
 import StringIO
 
 class CombinedTest(unittest.TestCase):
-    def dont_test_line_to_words(self):
+    def test_line_to_words(self):
         #                                      01234567890123456
-        words, rest = textutils.line_to_words('This is  a, line')
+        words, rest = speedread.textutils.line_to_words('This is  a, line')
         self.assertEquals(rest, 'line')
         self.assertEquals([word.word for word in words], ['This', 'is', 'a'])
         self.assertEquals([word.sep for word in words], [' ', '  ', ', '])
@@ -16,14 +16,14 @@ class CombinedTest(unittest.TestCase):
     def test_read_line(self):
         #                      0 1234567 8 90123
         f = StringIO.StringIO('A\naa aaa\n\naaaa')
-        reader = speedread.Reader(f)
+        reader = speedread.main.Reader(f)
 
         words = []
         while True:
             word = reader.get_word()
-            if word.type == textutils.WORD_TYPE.PARAGRAPH:
+            if word.type == speedread.textutils.WORD_TYPE.PARAGRAPH:
                 continue
-            if word.type == textutils.WORD_TYPE.END_OF_FILE:
+            if word.type == speedread.textutils.WORD_TYPE.END_OF_FILE:
                 break
             words.append(word)
         self.assertEquals([w.word for w in words], ['A', 'aa', 'aaa', 'aaaa'])

@@ -11,12 +11,12 @@ import time
 import blessings
 import readchar
 
-import contextutils
-import seeksearch
-import termutils
-import textutils
-from textutils import WORD_TYPE, WordInfo
-import asyncutils
+from . import contextutils
+from . import seeksearch
+from . import termutils
+from . import textutils
+from .textutils import WORD_TYPE, WordInfo
+from . import asyncutils
 
 
 PARAGRAPH = WordInfo(id=None, offset=None, word=u'¶', type=WORD_TYPE.PARAGRAPH, sep=None)
@@ -34,10 +34,11 @@ def main():
     PARSER.add_argument('--offset', type=int, help='Start reading rom a character offset', default=0)
     PARSER.add_argument('--script', type=str, help='Carry out a sequence of commands (e.g. for testing)', default=None)
 
-    PARSER.add_argument('filename', type=str, help='Speed of output in words per minute', nargs='?')
+    PARSER.add_argument('filename', type=str, help='Speed of output in words per minute')
     args = PARSER.parse_args()
 
-    with open(args.filename) as f:
+    stream = open(args.filename)
+    with stream as f:
         reader = Reader(f)
         term = blessings.Terminal()
 
