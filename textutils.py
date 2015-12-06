@@ -15,7 +15,7 @@ def line_to_words(line):
         rest = line
         while rest:
             word_text, sep, rest = re_partition(rest, u'[, ;.—\-]+')
-            if sep is not None:
+            if word_text and sep is not None:
                 word_info = WordInfo(id=None, type=WORD_TYPE.UNKNOWN, word=word_text, sep=sep, offset=word_offset)
                 words.append(word_info)
                 word_offset += len((word_text + (sep or '')).encode('utf8'))

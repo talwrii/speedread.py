@@ -267,7 +267,7 @@ class Pusher(object):
                 if word_info is None:
                     return
                 else:
-                    self.display.display_word(word_info.word)
+                    self.display.display_word(word_info.word + (word_info.sep if word_info.sep and word_info.sep.strip() else ''))
 
                 delay = Speedread.word_multiple(word_info.type, word_info.word) * self.word_period
 
@@ -299,7 +299,7 @@ class Reader(object):
 
         if index != -1:
             self.flush_cache()
-            self.stream.seek(index)
+            self.stream.seek(index + 1)
 
     def flush_cache(self):
         self._read_ahead_words = collections.deque()
