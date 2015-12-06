@@ -1,3 +1,5 @@
+
+# encoding: utf8
 import argparse
 import collections
 import math
@@ -309,6 +311,7 @@ class Reader(object):
         self.sentence_tracker = SentenceTracker()
         self.read_word_id = 0
         self.displayed_word_id = 0
+        self.preceeding_empty_line = False
 
     def forward_sentence(self, count=1, reverse=False):
         with seeksearch.save_excursion(self.stream):
@@ -346,21 +349,37 @@ class Reader(object):
         if not line:
             return None, None
 
-        rest = line
+
+        if line.strip() == '':
+            self.preceeding_empty_line = True
+            return
+
         while True:
-            word, sep, rest = re_partition(rest, '[, ;.]+')
-            self.read_word_id += 1
-            word_type = self.word_classifier.read_ahead_word(word, sep)
-            word_text = word.strip() + (sep if sep != ' ' and sep is not None else '')
-            word_info = WordInfo(id=self.read_word_id, type=word_type, word=word_text, sep=sep)
+            if self.preceeding_empty_line:
+                word_info = Paragraph(self.read_word_id, offset=word_offset)
+                self.read_word_id += 1
+                self.preceeding_empty_line = False
+            else:
+                word, sep, rest = re_partition(rest, u'[, ;.—\-]+')
+                print repr(word), repr(rest), repr(sep)
+
+                word_offset = self.stream.tell() - len(self.last_line_leftover.encode('utf8'))
+
+                self.read_word_id += 1
+
+                word_text = word.strip() + (sep if sep != ' ' and sep is not None else '')
+                word_info = WordInfo(id=self.read_word_id, type=WORD_TYPE.UNKNOWN, word=word_text, sep=sep, offset=word_offset)
+
+            word_type = self.word_classifier.read_ahead_word(word_info)
+            word_info = word_info._replace(type=word_type)
 
             self.sentence_tracker.read_ahead_word(word_info)
 
-            if word.strip():
+            if word_info.type == WORD_TYPE.PARAGRAPH or word_info.word.strip():
                 self._read_ahead_words.append(word_info)
+            else:
 
-            if sep is None:
-                break
+            word_offset += len(word.encode('utf8')) + len(sep)
 
     def get_word(self):
         while not self._read_ahead_words:
@@ -378,6 +397,9 @@ class SentenceTracker(object):
         self._current_sentence_parts = []
 
     def read_ahead_word(self, word_info):
+        if word_info.type == WORD_TYPE.PARAGRAPH:
+            return
+
         self._current_sentence_parts.append(word_info.word)
         if word_info.sep:
             self._current_sentence_parts.append(word_info.sep)
@@ -405,14 +427,19 @@ class WordClassifier(object):
     def __init__(self):
         self.last_word_type = None
 
-    def read_ahead_word(self, word, sep):
-        word_type = self._get_word_type(word, sep, self.last_word_type)
+    def read_ahead_word(self, word_info):
+        if word_info.type == WORD_TYPE.PARAGRAPH:
+            word_type = WORD_TYPE.PARAGRAPH
+        else:
+            word_type = self._get_word_type(word_info.word, word_info.sep, self.last_word_type)
         self.last_word_type = word_type
         return word_type
 
     @staticmethod
     def _get_word_type(word, sep, last_word_type):
-        if sep is None:
+        if last_word_type == WORD_TYPE.PARAGRAPH:
+            return WORD_TYPE.SENTENCE_BEGIN
+        elif sep is None:
             return WORD_TYPE.NORMAL
         elif ',' in sep or ';' in sep:
             return WORD_TYPE.BEFORE_COMMA
@@ -430,6 +457,8 @@ class WORD_TYPE(object):
     SENTENCE_END = 'sentence_end'
     SENTENCE_BEGIN = 'sentence_begin'
     NORMAL = 'normal'
+    PARAGRAPH = 'special'
+    UNKNOWN = 'unknown'
 
 
 class Speedread(object):
@@ -443,12 +472,13 @@ class Speedread(object):
 
     @staticmethod
     def word_multiple(word_type, word):
-        word_scaling = 1 + math.sqrt(len(word)) / math.sqrt(4)
+        word_scaling = max(1, math.sqrt(len(word)) / math.sqrt(5))
         return {
             WORD_TYPE.BEFORE_COMMA: 2,
             WORD_TYPE.SENTENCE_BEGIN: 3,
             WORD_TYPE.NORMAL: word_scaling,
-            WORD_TYPE.SENTENCE_END: word_scaling
+            WORD_TYPE.SENTENCE_END: word_scaling,
+            WORD_TYPE.PARAGRAPH: 4
         }[word_type]
 
 
@@ -460,14 +490,14 @@ def spawn(f):
 
 def re_partition(text, match_re):
     "Like str.partition by uses a regular expression for splitting"
-    full_re = '(.*?)({})(.*)'.format(match_re)
+    full_re = u'(.*?)({})(.*)'.format(match_re)
     match = re.search(full_re, text)
     if match:
         return match.group(1), match.group(2), match.group(3)
     else:
         return text, None, ''
 
-WordInfo = collections.namedtuple('WordInfo', 'id type word sep')
+WordInfo = collections.namedtuple('WordInfo', 'id type word sep offset')
 
 
 if __name__ == '__main__':
