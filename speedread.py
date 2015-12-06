@@ -267,12 +267,11 @@ class Pusher(object):
             with self.lock:
                 self.timer.clear()
 
-
 class Reader(object):
     def __init__(self, stream):
         self.stream = stream
         self._read_ahead_words = collections.deque()
-        self.word_classifier = WordClassifier()
+        self.word_classifier = textutils.WordClassifier()
         self.sentence_tracker = SentenceTracker()
         self.read_word_id = 0
         self.displayed_word_id = 0
@@ -403,41 +402,6 @@ class SentenceTracker(object):
         for end_id, sentence in sorted(self._sentences_by_last_id.items()):
             if end_id > word_id:
                 return sentence
-
-class WordClassifier(object):
-    "Classify types of word"
-
-    def __init__(self):
-        self.last_word_type = None
-
-    def read_ahead_word(self, word_info):
-        if word_info.type == WORD_TYPE.PARAGRAPH:
-            word_type = WORD_TYPE.PARAGRAPH
-        else:
-            word_type = self._get_word_type(word_info, self.last_word_type)
-        self.last_word_type = word_type
-        return word_type
-
-    @staticmethod
-    def _get_word_type(word_info, last_word_type):
-        sep = word_info.sep
-
-        if word_info.type != WORD_TYPE.UNKNOWN:
-            return word_info.type
-
-        if last_word_type == WORD_TYPE.PARAGRAPH:
-            return WORD_TYPE.SENTENCE_BEGIN
-        elif sep is None:
-            return WORD_TYPE.NORMAL
-        elif ',' in sep or ';' in sep:
-            return WORD_TYPE.BEFORE_COMMA
-        elif '.' in sep:
-            return WORD_TYPE.SENTENCE_END
-        else:
-            if last_word_type == WORD_TYPE.SENTENCE_END:
-                return WORD_TYPE.SENTENCE_BEGIN
-            else:
-                return WORD_TYPE.NORMAL
 
 class Speedread(object):
     "Purish logic related to the algorithm"
