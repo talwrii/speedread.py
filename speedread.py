@@ -126,6 +126,7 @@ class Controller(object):
         return '\n'.join(result)
 
     def run(self):
+        self.display.set_wpm(60 / self.pusher.word_period)
         commands = self.commands()
         while True:
             char = readchar.readchar()
@@ -137,10 +138,12 @@ class Controller(object):
         "Show words faster"
         # Should really be locked
         self.pusher.word_period *= 0.9
+        self.display.set_wpm(60/self.pusher.word_period)
 
     def slow_down(self):
         "Show words more slowly"
         self.pusher.word_period /= 0.9
+        self.display.set_wpm(60/self.pusher.word_period)
 
 class Display(object):
     def __init__(self, term, writer):
@@ -149,6 +152,10 @@ class Display(object):
         self.term = term
         self.writer = writer
         self.word_display = None
+        self.wpm = '?'
+
+    def set_wpm(self, wpm):
+        self.wpm = '{:.0f}'.format(wpm)
 
     def display_word(self, word):
         if self.word_display is not None:
@@ -167,7 +174,7 @@ class Display(object):
         print text
 
     def format_insert_line(self, focus_column):
-        return ' ' * (focus_column) + 'v'
+        return ' ' * (focus_column) + 'v' + ' ' + self.wpm
 
     def format_word_line(self, focus_column, word):
         term = self.term
