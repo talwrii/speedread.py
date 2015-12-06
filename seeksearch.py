@@ -43,8 +43,6 @@ def enumerate_in_chunk(chunk, needle, reverse=False):
         else:
             yield pos
 
-
-
 def seek_find(stream, needle, chunk_size=1000, count=1, reverse=False):
     num_found = 0
     chunk_reader = rread_chunks if reverse else read_chunks

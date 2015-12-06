@@ -305,6 +305,7 @@ class Reader(object):
         self._read_ahead_words = collections.deque()
         self.read_word_id = 0
         self.sentence_tracker.reset()
+        self.last_line_leftover = ''
 
     def seek(self, offset):
         self.stream.seek(offset)
