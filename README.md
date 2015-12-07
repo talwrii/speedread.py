@@ -22,6 +22,6 @@ in preparation for feature creeping.
 
 # Quickstart
 
-    pip install git+https://github.com/talwrii/speedread.py.git#speedread --upgrade
+    pip install git+https://github.com/talwrii/speedread.py.git#speedread.py --upgrade
     pyspeedread --help
     pyspeedread text.txt
