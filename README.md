@@ -22,9 +22,6 @@ in preparation for feature creeping.
 
 # Quickstart
 
-    git clone...
-    cd speedread.py
-    python setup.py develop --user
+    pip install https://github.com/talwrii/speedread.py#speedread
+    pyspeedread --help
     pyspeedread text.txt
-
-h - for help
